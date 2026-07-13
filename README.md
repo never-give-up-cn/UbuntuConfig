@@ -85,3 +85,4 @@ BIOS/x64 客户端:
 ARM64 UEFI 客户端:
   PXE → DHCP(获取IP) → TFTP(bootaa64.efi) → Windows 启动管理器
 ```
+- 系统时区: Asia/Shanghai (CST, UTC+8)

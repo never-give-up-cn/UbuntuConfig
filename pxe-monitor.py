@@ -420,7 +420,7 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
                         "nfs_clients": get_nfs_clients(),
                         "iscsi_sessions": get_iscsi_sessions(),
                         "system": get_system_info(),
-                        "download": get_download_progress(),
+                        "download": "",
                         "pxe_log": get_pxe_log(),
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     }
@@ -485,7 +485,7 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
         # Header
         html += f'''
         <div class="header">
-            <h1>🖥️ PXE 服务器监控 <small>192.168.183.131</small></h1>
+            <h1>🖥️ PXE 服务器监控 <small>192.168.1.14</small></h1>
             <span class="time">🕐 {now}</span>
         </div>
         '''
