@@ -170,6 +170,37 @@ def get_system_info():
     load = run("cat /proc/loadavg | cut -d' ' -f1-3", 3)
     return {"uptime": uptime or "N/A", "disk": disk or "N/A", "mem": mem or "N/A", "load": load or "N/A"}
 
+def get_network_speed():
+    """获取网络带宽速度（读取 /proc/net/dev 计算差值）"""
+    iface = "ens33"
+    def read_bytes():
+        out = run(f"cat /proc/net/dev | grep {iface}", 2)
+        if out:
+            parts = out.split()
+            if len(parts) >= 10:
+                return int(parts[1]), int(parts[9])  # rx_bytes, tx_bytes
+        return 0, 0
+
+    rx1, tx1 = read_bytes()
+    time.sleep(1)
+    rx2, tx2 = read_bytes()
+
+    rx_speed = (rx2 - rx1) / 1024  # KB/s
+    tx_speed = (tx2 - tx1) / 1024  # KB/s
+
+    # Format nicely
+    def fmt(kbps):
+        if kbps > 1024:
+            return f"{kbps/1024:.1f} MB/s"
+        return f"{kbps:.1f} KB/s"
+
+    return {
+        "rx": fmt(rx_speed),
+        "tx": fmt(tx_speed),
+        "rx_raw": round(rx_speed, 1),
+        "tx_raw": round(tx_speed, 1)
+    }
+
 def get_iscsi_info():
     """获取 iSCSI 目标信息"""
     targets = []
@@ -512,6 +543,16 @@ def render_pxe_menu_card(options):
     html += '</div>'
     return html
 
+def render_netcard_card(speed):
+    """渲染网络带宽卡片"""
+    html = '<div class="card"><div class="card-title">🌐 网络带宽 (ens33)</div>'
+    html += f'<div style="text-align:center;padding:10px 0;">'
+    html += f'<div style="font-size:28px;color:#4fc3f7;">⬇ {speed.get("rx", "0 KB/s")}</div>'
+    html += f'<div style="font-size:13px;color:#78909c;margin-top:8px;">⬆ {speed.get("tx", "0 KB/s")}</div>'
+    html += '</div>'
+    html += '</div>'
+    return html
+
 def html_escape(s):
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -550,6 +591,7 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
                         "tftp_files": get_tftp_summary(),
                         "menu_options": get_pxe_menu_options(),
                         "nfs_clients_info": get_nfs_clients_info(),
+                        "net_speed": get_network_speed(),
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     }
                 except Exception as e:
@@ -594,6 +636,7 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
             iso_mounts = get_iso_mounts()
             tftp_files = get_tftp_summary()
             menu_options = get_pxe_menu_options()
+            net_speed = get_network_speed()
         except Exception as e:
             # If any data collection fails, return a minimal page
             services = [
@@ -650,6 +693,7 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
         html += render_iso_card(iso_mounts)
         html += render_tftp_card(tftp_files)
         html += render_pxe_menu_card(menu_options)
+        html += render_netcard_card(net_speed)
         html += '</div>'
 
         # Full-width cards
