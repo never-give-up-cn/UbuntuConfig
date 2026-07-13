@@ -40,8 +40,8 @@ def run(cmd, timeout=5):
         return ""
 
 def run_sudo(cmd, timeout=5):
-    """使用 sudo 执行命令"""
-    return run(f'echo "1" | sudo -S {cmd} 2>/dev/null || true', timeout)
+    """使用 sudo 执行命令（无需密码）"""
+    return run(f'sudo -n {cmd} 2>/dev/null', timeout)
 
 def check_service(name):
     """检查 systemd 服务状态"""
@@ -169,6 +169,80 @@ def get_system_info():
     mem = run("free -h | grep Mem", 3)
     load = run("cat /proc/loadavg | cut -d' ' -f1-3", 3)
     return {"uptime": uptime or "N/A", "disk": disk or "N/A", "mem": mem or "N/A", "load": load or "N/A"}
+
+def get_iscsi_info():
+    """获取 iSCSI 目标信息"""
+    targets = []
+    out = run_sudo("tgtadm --mode target --op show 2>/dev/null || true", 5)
+    if out:
+        current = {}
+        for line in out.split("\n"):
+            line = line.strip()
+            if line.startswith("Target"):
+                if current:
+                    targets.append(current)
+                current = {"name": line.split(":")[1].strip() if ":" in line else line, "luns": [], "acl": []}
+            elif "LUN:" in line and "Type:" in line:
+                pass
+            elif "Backing store path:" in line:
+                path = line.split(":")[1].strip()
+                if path and path != "None":
+                    current.setdefault("luns", []).append(path)
+            elif "ACL information:" in line:
+                pass
+            elif current and current.get("name") and line and not any(x in line for x in ["System", "Driver", "State", "SCSI", "Size:", "Online:", "Type:", "Backing", "I_T nexus"]):
+                if "192.168" in line or "iqn." in line:
+                    current.setdefault("acl", []).append(line)
+        if current:
+            targets.append(current)
+    return targets
+
+def get_iso_mounts():
+    """获取 ISO 挂载状态"""
+    mounts = []
+    out = run("mount | grep iso | grep -v sr0", 3)
+    if out:
+        for line in out.split("\n"):
+            parts = line.split(" ")
+            if len(parts) > 2:
+                mounts.append({
+                    "iso": parts[0] if parts[0].endswith(".iso") else "",
+                    "mount": parts[2] if len(parts) > 2 else "",
+                    "type": parts[-2] if len(parts) > 4 else ""
+                })
+    return mounts
+
+def get_tftp_summary():
+    """获取 TFTP 文件状态"""
+    files = {}
+    for f in ["pxelinux.0", "vesamenu.c32", "wimboot", "boot.sdi", "boot.wim", "ipxe.pxe", "undionly.kpxe"]:
+        path = f"/srv/tftp/{f}"
+        size = run(f"ls -lh {path} 2>/dev/null | awk '{{print $5}}'", 2)
+        files[f] = size or "missing"
+    return files
+
+def get_pxe_menu_options():
+    """获取 PXE 菜单选项"""
+    options = []
+    out = run("grep 'MENU LABEL' /srv/tftp/pxelinux.cfg/default 2>/dev/null", 3)
+    if out:
+        for line in out.split("\n"):
+            if "^" in line:
+                key = line.split("^")[1][0] if len(line.split("^")) > 1 else "?"
+                label = line.split("LABEL")[-1].strip().split("^")[-1].strip() if "LABEL" in line else line.strip()
+                options.append({"key": key, "label": label})
+    return options
+
+def get_nfs_clients_info():
+    """获取 NFS 客户端信息"""
+    clients = []
+    out = run_sudo("showmount -a 2>/dev/null", 5)
+    if out:
+        for line in out.split("\n"):
+            line = line.strip()
+            if line and "All mount points" not in line:
+                clients.append(line)
+    return clients
 
 # ===== HTML 模板 =====
 
@@ -389,6 +463,55 @@ def render_log_card(logs):
     html += '</div>'
     return html
 
+def render_iscsi_card(targets):
+    """渲染 iSCSI 目标状态"""
+    html = '<div class="card"><div class="card-title">💾 iSCSI 目标</div>'
+    if targets:
+        for t in targets:
+            name = t.get("name", "unknown").split(":")[-1].split(".")[-1] if ":" in t.get("name", "") else t.get("name", "")
+            luns = t.get("luns", [])
+            html += f'<div class="info-row"><span class="label">{name}</span><span class="value">{len(luns)} LUN</span></div>'
+            for lun in luns:
+                html += f'<div class="info-row" style="padding-left:15px;font-size:12px;"><span class="label">{lun.split("/")[-1]}</span><span class="value">{run("ls -lh " + lun + " 2>/dev/null | awk \\'{print $5}\\'", 2) or ""}</span></div>'
+    else:
+        html += '<div class="empty-state">无 iSCSI 目标</div>'
+    html += '</div>'
+    return html
+
+def render_iso_card(mounts):
+    """渲染 ISO 挂载状态"""
+    html = '<div class="card"><div class="card-title">📀 ISO 挂载</div>'
+    if mounts:
+        for m in mounts:
+            iso = m.get("iso", "").split("/")[-1] if m.get("iso") else "NFS共享"
+            mount = m.get("mount", "")
+            html += f'<div class="info-row"><span class="label">{iso[:30]}</span><span class="value">{"✅" if m.get("type") else "❌"}</span></div>'
+            html += f'<div style="font-size:11px;color:#78909c;padding-left:10px;">{mount}</div>'
+    else:
+        html += '<div class="empty-state">无 ISO 挂载</div>'
+    html += '</div>'
+    return html
+
+def render_tftp_card(files):
+    """渲染 TFTP 文件状态"""
+    html = '<div class="card"><div class="card-title">📁 TFTP 启动文件</div>'
+    for name, size in files.items():
+        status = "✅" if size != "missing" else "❌"
+        html += f'<div class="info-row"><span class="label">{status} {name}</span><span class="value">{size if size != "missing" else "缺失"}</span></div>'
+    html += '</div>'
+    return html
+
+def render_pxe_menu_card(options):
+    """渲染 PXE 菜单选项"""
+    html = '<div class="card"><div class="card-title">📋 PXE 启动菜单</div>'
+    if options:
+        for opt in options:
+            html += f'<div class="info-row"><span class="label">{opt.get("key", "?")}</span><span class="value">{opt.get("label", "").replace("^", "")}</span></div>'
+    else:
+        html += '<div class="empty-state">无菜单配置</div>'
+    html += '</div>'
+    return html
+
 def html_escape(s):
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -422,6 +545,11 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
                         "system": get_system_info(),
                         "download": "",
                         "pxe_log": get_pxe_log(),
+                        "iscsi_targets": get_iscsi_info(),
+                        "iso_mounts": get_iso_mounts(),
+                        "tftp_files": get_tftp_summary(),
+                        "menu_options": get_pxe_menu_options(),
+                        "nfs_clients_info": get_nfs_clients_info(),
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     }
                 except Exception as e:
@@ -462,6 +590,10 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
             iscsi_sessions = get_iscsi_sessions()
             sysinfo = get_system_info()
             logs = get_pxe_log()
+            iscsi_targets = get_iscsi_info()
+            iso_mounts = get_iso_mounts()
+            tftp_files = get_tftp_summary()
+            menu_options = get_pxe_menu_options()
         except Exception as e:
             # If any data collection fails, return a minimal page
             services = [
@@ -497,6 +629,8 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
             <div class="status-item"><span class="status-dot active"></span> {active_count}/{len(services)} 服务运行中</div>
             <div class="status-item">📡 {len(leases)} DHCP 租约</div>
             <div class="status-item">🔍 {len([h for h in hosts if h.get("state")=="REACHABLE"])} 主机在线</div>
+            <div class="status-item">💾 {len(iscsi_targets)} iSCSI 目标</div>
+            <div class="status-item">📀 {len(iso_mounts)} ISO 已挂载</div>
 
         </div>
         '''
@@ -508,6 +642,14 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
 
         html += render_arp_card(hosts)
         html += render_connections_card(samba_clients, nfs_clients, iscsi_sessions)
+        html += '</div>'
+
+        # PXE 状态行
+        html += '<div class="grid">'
+        html += render_iscsi_card(iscsi_targets)
+        html += render_iso_card(iso_mounts)
+        html += render_tftp_card(tftp_files)
+        html += render_pxe_menu_card(menu_options)
         html += '</div>'
 
         # Full-width cards
