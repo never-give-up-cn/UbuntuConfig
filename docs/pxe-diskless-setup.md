@@ -211,3 +211,58 @@ ufw status | grep 3260
 └── iscsi/
     └── windows11.img            # iSCSI 磁盘映像 (64G)
 ```
+
+## PXE 启动故障排除
+
+### 1. DHCP 获取 IP 成功但 TFTP 下载失败
+```
+PXE-T02: cannot access /srv/tftp/pxelinux.0: Permission denied
+PXE-E3C: TFTP Error - Access Violation
+```
+**原因**: `tftp-secure` 限制或文件权限不足  
+**解决**: 
+```bash
+# 注释 tftp-secure 或调整文件权限
+sudo sed -i 's/^tftp-secure/#tftp-secure/' /etc/dnsmasq.d/pxe.conf
+sudo chmod -R 644 /srv/tftp/*
+sudo systemctl restart dnsmasq
+```
+
+### 2. PXELINUX 启动后报缺少 COM32 模块
+```
+Failed to load libcom32.c32
+Failed to load COM32 file vesamenu.c32
+```
+**原因**: 缺少 BIOS COM32 运行时库  
+**解决**:
+```bash
+sudo cp /usr/lib/syslinux/modules/bios/libcom32.c32 /srv/tftp/
+sudo cp /usr/lib/syslinux/modules/bios/libmenu.c32 /srv/tftp/
+sudo cp /usr/lib/syslinux/modules/bios/libutil.c32 /srv/tftp/
+sudo cp /usr/lib/syslinux/modules/bios/menu.c32 /srv/tftp/
+sudo cp /usr/lib/syslinux/modules/bios/vesamenu.c32 /srv/tftp/
+sudo cp /usr/lib/syslinux/modules/bios/reboot.c32 /srv/tftp/
+sudo cp /usr/lib/syslinux/modules/bios/poweroff.c32 /srv/tftp/
+```
+
+### 3. dnsmasq 启动失败
+```
+bad option at line XX of /etc/dnsmasq.d/pxe.conf
+```
+**原因**: 配置文件语法错误（常见: 多余字符、拼写错误）  
+**解决**:
+```bash
+# 检查语法
+sudo dnsmasq --test -C /etc/dnsmasq.d/pxe.conf
+# 修复后重启
+sudo systemctl restart dnsmasq
+```
+
+### 4. 客户端获取不到 IP
+**原因**: DHCP 服务未运行或网段不匹配  
+**解决**:
+```bash
+sudo systemctl status dnsmasq
+sudo ss -ulnp | grep :67
+# 确保客户端和服务器在同一网段
+```
