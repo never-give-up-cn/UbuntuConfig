@@ -401,21 +401,17 @@ HTML_FOOTER = """
 """
 
 def render_service_card(services):
-    """渲染服务状态卡片"""
     html = '<div class="card"><div class="card-title">📡 服务状态</div>'
     for s in services:
         status = s["status"]
-        dot_class = "active" if status == "active" else "inactive"
-        badge_class = "badge-active" if status == "active" else "badge-inactive"
-        html += f'''
-        <div class="service-status">
-            <span class="status-dot {dot_class}"></span>
-            <span class="service-name">{s["name"].upper()}</span>
-            <span class="service-badge {badge_class}">{status}</span>
-        </div>'''
+        if status == "active":
+            html += '<div class="service-item"><span class="dot dot-ok"></span><span class="srv-name">' + s["name"].upper() + '</span><span class="srv-badge badge-ok">active</span></div>'
+        elif status == "failed":
+            html += '<div class="service-item"><span class="dot dot-fail"></span><span class="srv-name">' + s["name"].upper() + '</span><span class="srv-badge badge-fail">failed</span></div>'
+        else:
+            html += '<div class="service-item"><span class="dot dot-warn"></span><span class="srv-name">' + s["name"].upper() + '</span><span class="srv-badge badge-warn">' + status + '</span></div>'
     html += '</div>'
     return html
-
 def render_system_card(info):
     """渲染系统信息卡片"""
     def parse_disk(line):
@@ -690,8 +686,8 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
         # Header
         html += f'''
         <div class="header">
-            <h1>🖥️ PXE 服务器监控 <small id="server-ip">{net_info.get("ip", "?")}</small></h1>
-            <span class="time">🕐 {now}</span>
+            <h1>🖥️ PXE 监控 <small id="server-ip">{net_info.get("ip", "?")}</small></h1>
+            <span class="time">{now}</span>
         </div>
         '''
 
