@@ -19,12 +19,20 @@ HOST = "0.0.0.0"
 PORT = 8080
 REFRESH_SECONDS = 5  # 前端自动刷新间隔
 
+# 环境设置
+MY_ENV = os.environ.copy()
+MY_ENV["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+MY_ENV["LANG"] = "C.UTF-8"
+
 # ===== 监控命令定义 =====
 
 def run(cmd, timeout=5):
     """执行 shell 命令，返回输出"""
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(
+            cmd, shell=True, capture_output=True, text=True,
+            timeout=timeout, env=MY_ENV
+        )
         return r.stdout.strip()
     except subprocess.TimeoutExpired:
         return ""
@@ -32,18 +40,18 @@ def run(cmd, timeout=5):
         return ""
 
 def run_sudo(cmd, timeout=5):
-    """使用 sudo 执行命令。返回空字符串超时或失败"""
-    return run(f'echo "1" | sudo -S timeout {timeout} {cmd} 2>/dev/null || true', timeout + 2)
-
-def run_timeout(cmd, timeout=5):
-    """用 timeout 命令包裹，确保不卡死"""
-    return run(f'timeout {timeout} {cmd} 2>/dev/null || true', timeout + 2)
+    """使用 sudo 执行命令"""
+    return run(f'echo "1" | sudo -S {cmd} 2>/dev/null || true', timeout)
 
 def check_service(name):
     """检查 systemd 服务状态"""
-    status = run_timeout(f"systemctl is-active {name}", 3)
-    enabled = run_timeout(f"systemctl is-enabled {name} 2>/dev/null", 3)
-    return {"name": name, "status": status or "inactive", "enabled": enabled or "unknown"}
+    status = run(f"systemctl is-active {name} 2>/dev/null", 3)
+    enabled = run(f"systemctl is-enabled {name} 2>/dev/null", 3)
+    if not status:
+        status = "inactive"
+    if not enabled:
+        enabled = "unknown"
+    return {"name": name, "status": status, "enabled": enabled}
 
 def get_dhcp_leases():
     """获取 DHCP 租约列表"""
@@ -111,50 +119,67 @@ def get_nfs_clients():
 def get_pxe_log():
     """获取最近的 PXE/DHCP 日志"""
     logs = []
-    log_file = "/var/log/pxe/dnsmasq.log"
-    if os.path.exists(log_file):
-        with open(log_file) as f:
-            lines = f.readlines()
-            for line in lines[-30:]:
-                logs.append(line.strip())
-    return logs
+    for log_file in ["/var/log/pxe/dnsmasq.log", "/var/log/syslog", "/var/log/messages"]:
+        if os.path.exists(log_file) and os.access(log_file, os.R_OK):
+            try:
+                with open(log_file) as f:
+                    lines = f.readlines()
+                    # Filter for PXE/DHCP related lines
+                    for line in lines[-50:]:
+                        if any(kw in line.lower() for kw in ["dhcp", "pxe", "tftp", "dnsmasq"]):
+                            logs.append(line.strip())
+                    if logs:
+                        break
+            except (IOError, PermissionError):
+                continue
+    # Also try journalctl for dnsmasq logs
+    if not logs:
+        out = run("journalctl -u dnsmasq --no-pager -n 10 2>/dev/null", 3)
+        if out:
+            logs = out.split("\n")[-10:]
+    return logs[-30:]
 
 def get_arp_table():
     """获取 ARP 表（发现网络上的主机）"""
     hosts = []
-    out = run("arp -n 2>/dev/null || ip neigh show 2>/dev/null")
+    out = run("ip neigh show 2>/dev/null", 3)
+    if not out:
+        out = run("arp -n 2>/dev/null", 3)
     if out:
         for line in out.split("\n"):
-            if line.strip():
-                parts = line.split()
-                if len(parts) >= 4 and "incomplete" not in line:
+            line = line.strip()
+            if not line or "incomplete" in line:
+                continue
+            parts = line.split()
+            if len(parts) >= 4:
+                state = parts[-1] if parts[-1] in ["REACHABLE", "STALE", "DELAY", "PERMANENT"] else "reachable"
+                if state == "REACHABLE":
                     hosts.append({
-                        "ip": parts[0],
-                        "mac": parts[2] if len(parts) > 2 else "",
-                        "state": parts[-1] if parts[-1] in ["REACHABLE", "STALE", "DELAY"] else "reachable"
+                        "ip": parts[0].replace("(", "").replace(")", ""),
+                        "mac": parts[3] if parts[1] == "lladdr" else (parts[4] if len(parts) > 4 else ""),
                     })
     return hosts
 
 def get_download_progress():
     """获取 aMule 下载进度"""
-    out = run_timeout("amulecmd -P '1' -c 'show dl' 2>&1", 8)
-    if not out:
-        out = run_timeout("ps aux | grep amuled | grep -v grep || true", 3)
-        if out:
-            return "aMule 运行中 (amulecmd 无响应)"
-        return "aMule 未运行"
-    # Extract just the useful info
-    lines = out.split("\n")
-    useful = [l for l in lines if ".iso" in l or "[" in l or "Download" in l or "Waiting" in l]
-    return "\n".join(useful[-5:]) if useful else out[:200]
+    out = run("amulecmd -P '1' -c 'show dl' 2>&1", 8)
+    if out and "Succeeded" in out:
+        lines = out.split("\n")
+        useful = [l.strip() for l in lines if ".iso" in l or "[" in l or "%" in l]
+        return "\n".join(useful[-5:]) if useful else out[:300]
+    # Check if amuled process exists
+    proc = run("pgrep amuled 2>/dev/null", 3)
+    if proc:
+        return "aMule 运行中 (amulecmd 无响应)"
+    return "aMule 未运行"
 
 def get_system_info():
     """获取系统信息"""
-    uptime = run("uptime -p 2>/dev/null || uptime")
-    disk = run("df -h / | tail -1")
-    mem = run("free -h | grep Mem")
-    load = run("cat /proc/loadavg | cut -d' ' -f1-3")
-    return {"uptime": uptime, "disk": disk, "mem": mem, "load": load}
+    uptime = run("uptime -p 2>/dev/null || uptime", 3)
+    disk = run("df -h / | tail -1", 3)
+    mem = run("free -h | grep Mem", 3)
+    load = run("cat /proc/loadavg | cut -d' ' -f1-3", 3)
+    return {"uptime": uptime or "N/A", "disk": disk or "N/A", "mem": mem or "N/A", "load": load or "N/A"}
 
 # ===== HTML 模板 =====
 
