@@ -170,6 +170,12 @@ def get_system_info():
     load = run("cat /proc/loadavg | cut -d' ' -f1-3", 3)
     return {"uptime": uptime or "N/A", "disk": disk or "N/A", "mem": mem or "N/A", "load": load or "N/A"}
 
+def get_net_info():
+    """获取网卡协商速度和本机IP"""
+    speed = run("cat /sys/class/net/ens33/speed 2>/dev/null", 2)
+    ip = run("ip -4 addr show ens33 2>/dev/null | grep inet | awk '{print $2}' | cut -d/ -f1", 2)
+    return {"speed": f"{speed} Mbps" if speed else "未知", "ip": ip or "未知"}
+
 def get_network_speed():
     """获取网络带宽速度和客户端连接详情"""
     iface = "ens33"
@@ -394,6 +400,18 @@ HTML_FOOTER = """
     <div style="text-align: center; padding: 20px; color: #546e7a; font-size: 12px; border-top: 1px solid #1e3a4f; margin-top: 20px;">
         PXE Server Monitor · 自动刷新每 REFRESH_SECONDS 秒
     </div>
+    <script>
+        // Auto-detect server IP from current URL
+        document.getElementById("server-ip").textContent = window.location.hostname;
+        // Also update API endpoint for refresh
+        setInterval(function() {
+            fetch("/api/status").then(r=>r.json()).then(d=>{
+                if(d.net_info && d.net_info.ip) {
+                    document.getElementById("server-ip").textContent = d.net_info.ip;
+                }
+            });
+        }, 30000);
+    </script>
 </body>
 </html>
 """
@@ -554,11 +572,13 @@ def render_pxe_menu_card(options):
     html += '</div>'
     return html
 
-def render_netcard_card(speed):
+def render_netcard_card(speed, net_info):
     """渲染网络带宽和客户端连接卡片"""
     html = '<div class="card"><div class="card-title">🌐 网络带宽 & 客户端</div>'
+    # Negotiated link speed
+    spd = net_info.get("speed", "未知")
+    html += f'<div style="text-align:center;font-size:11px;color:#78909c;padding-bottom:4px;">🔗 {spd}</div>'
     # Total bandwidth
-    html += f'<div style="text-align:center;padding:6px 0 10px 0;border-bottom:1px solid #1e3140;">'
     html += f'<span style="font-size:24px;color:#4fc3f7;">⬇ {speed.get("rx", "0 KB/s")}</span>'
     html += f'<span style="font-size:13px;color:#78909c;margin:0 8px;">|</span>'
     html += f'<span style="font-size:14px;color:#a5d6a7;">⬆ {speed.get("tx", "0 KB/s")}</span>'
@@ -616,6 +636,7 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
                         "menu_options": get_pxe_menu_options(),
                         "nfs_clients_info": get_nfs_clients_info(),
                         "net_speed": get_network_speed(),
+                        "net_info": get_net_info(),
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     }
                 except Exception as e:
@@ -661,6 +682,7 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
             tftp_files = get_tftp_summary()
             menu_options = get_pxe_menu_options()
             net_speed = get_network_speed()
+            net_info = get_net_info()
         except Exception as e:
             # If any data collection fails, return a minimal page
             services = [
@@ -684,7 +706,7 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
         # Header
         html += f'''
         <div class="header">
-            <h1>🖥️ PXE 服务器监控 <small>192.168.1.14</small></h1>
+            <h1>🖥️ PXE 服务器监控 <small id="server-ip">{net_info.get("ip", "?")}</small></h1>
             <span class="time">🕐 {now}</span>
         </div>
         '''
@@ -717,7 +739,7 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
         html += render_iso_card(iso_mounts)
         html += render_tftp_card(tftp_files)
         html += render_pxe_menu_card(menu_options)
-        html += render_netcard_card(net_speed)
+        html += render_netcard_card(net_speed, net_info)
         html += '</div>'
 
         # Full-width cards
