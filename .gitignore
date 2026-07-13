@@ -1,0 +1,5 @@
+packages.list
+temp/
+*.part
+*.part.met
+*.part.met.bak
