@@ -171,34 +171,45 @@ def get_system_info():
     return {"uptime": uptime or "N/A", "disk": disk or "N/A", "mem": mem or "N/A", "load": load or "N/A"}
 
 def get_network_speed():
-    """获取网络带宽速度（读取 /proc/net/dev 计算差值）"""
+    """获取网络带宽速度和客户端连接详情"""
     iface = "ens33"
     def read_bytes():
         out = run(f"cat /proc/net/dev | grep {iface}", 2)
         if out:
             parts = out.split()
             if len(parts) >= 10:
-                return int(parts[1]), int(parts[9])  # rx_bytes, tx_bytes
+                return int(parts[1]), int(parts[9])
         return 0, 0
 
     rx1, tx1 = read_bytes()
     time.sleep(1)
     rx2, tx2 = read_bytes()
 
-    rx_speed = (rx2 - rx1) / 1024  # KB/s
-    tx_speed = (tx2 - tx1) / 1024  # KB/s
+    rx_speed = (rx2 - rx1) / 1024
+    tx_speed = (tx2 - tx1) / 1024
 
-    # Format nicely
     def fmt(kbps):
         if kbps > 1024:
             return f"{kbps/1024:.1f} MB/s"
         return f"{kbps:.1f} KB/s"
 
+    # 获取各服务活跃连接
+    services = {
+        "TFTP (69)": run("ss -tunap 2>/dev/null | grep ':69 ' | grep -v '127.0.0.1' | wc -l", 2),
+        "NFS (2049)": run("ss -tnap 2>/dev/null | grep ':2049 ' | wc -l", 2),
+        "Samba (445)": run("ss -tnap 2>/dev/null | grep ':445 ' | ESTAB | wc -l", 2),
+        "iSCSI (3260)": run("ss -tnap 2>/dev/null | grep ':3260 ' | wc -l", 2),
+    }
+    # 获取连接客户端IP列表
+    client_ips = run("ss -tn 2>/dev/null | grep -E ':2049|:445|:3260' | awk '{print $5}' | cut -d: -f1 | sort -u", 3)
+
     return {
         "rx": fmt(rx_speed),
         "tx": fmt(tx_speed),
         "rx_raw": round(rx_speed, 1),
-        "tx_raw": round(tx_speed, 1)
+        "tx_raw": round(tx_speed, 1),
+        "services": {k: int(v) if v.isdigit() else 0 for k, v in services.items()},
+        "client_ips": client_ips.split("\n") if client_ips else []
     }
 
 def get_iscsi_info():
@@ -544,12 +555,25 @@ def render_pxe_menu_card(options):
     return html
 
 def render_netcard_card(speed):
-    """渲染网络带宽卡片"""
-    html = '<div class="card"><div class="card-title">🌐 网络带宽 (ens33)</div>'
-    html += f'<div style="text-align:center;padding:10px 0;">'
-    html += f'<div style="font-size:28px;color:#4fc3f7;">⬇ {speed.get("rx", "0 KB/s")}</div>'
-    html += f'<div style="font-size:13px;color:#78909c;margin-top:8px;">⬆ {speed.get("tx", "0 KB/s")}</div>'
+    """渲染网络带宽和客户端连接卡片"""
+    html = '<div class="card"><div class="card-title">🌐 网络带宽 & 客户端</div>'
+    # Total bandwidth
+    html += f'<div style="text-align:center;padding:6px 0 10px 0;border-bottom:1px solid #1e3140;">'
+    html += f'<span style="font-size:24px;color:#4fc3f7;">⬇ {speed.get("rx", "0 KB/s")}</span>'
+    html += f'<span style="font-size:13px;color:#78909c;margin:0 8px;">|</span>'
+    html += f'<span style="font-size:14px;color:#a5d6a7;">⬆ {speed.get("tx", "0 KB/s")}</span>'
     html += '</div>'
+    # Per-service connections
+    for svc, count in speed.get("services", {}).items():
+        html += f'<div class="info-row"><span class="label">{svc}</span><span class="value">{count} 连接</span></div>'
+    # Client IPs
+    ips = speed.get("client_ips", [])
+    if ips:
+        html += '<div style="margin-top:8px;border-top:1px solid #1e3140;padding-top:8px;"><span style="font-size:12px;color:#78909c;">客户端 IP:</span></div>'
+        for ip in ips[:6]:
+            html += f'<div class="info-row" style="font-size:12px;"><span class="label">🔗 {ip}</span></div>'
+    else:
+        html += '<div class="empty-state">无活跃客户端</div>'
     html += '</div>'
     return html
 
