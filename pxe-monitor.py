@@ -161,18 +161,6 @@ def get_arp_table():
                 })
     return hosts
 
-def get_download_progress():
-    """获取 aMule 下载进度"""
-    out = run("amulecmd -P '1' -c 'show dl' 2>&1", 8)
-    if out and "Succeeded" in out:
-        lines = out.split("\n")
-        useful = [l.strip() for l in lines if ".iso" in l or "[" in l or "%" in l]
-        return "\n".join(useful[-5:]) if useful else out[:300]
-    # Check if amuled process exists
-    proc = run("pgrep amuled 2>/dev/null", 3)
-    if proc:
-        return "aMule 运行中 (amulecmd 无响应)"
-    return "aMule 未运行"
 
 def get_system_info():
     """获取系统信息"""
@@ -388,16 +376,6 @@ def render_connections_card(samba_clients, nfs_clients, iscsi_sessions):
     html += '</div>'
     return html
 
-def render_download_card(progress):
-    """渲染下载进度卡片"""
-    html = '<div class="card"><div class="card-title">⬇️ Windows 11 ISO 下载</div>'
-    if progress:
-        html += f'<div class="log-box" style="max-height:none;font-size:13px;">{progress}</div>'
-    else:
-        html += '<div class="empty-state">aMule 未运行</div>'
-    html += '</div>'
-    return html
-
 def render_log_card(logs):
     """渲染 PXE 日志卡片"""
     html = '<div class="card col-2"><div class="card-title">📋 PXE 日志（最近30条）</div>'
@@ -435,7 +413,6 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
                             "nfs": check_service("nfs-kernel-server"),
                             "smb": check_service("smbd"),
                             "tgt": check_service("tgt"),
-                            "amule": {"name": "amule", "status": "active" if run("pgrep amuled 2>/dev/null", 2) else "inactive"}
                         },
                         "dhcp_leases": get_dhcp_leases(),
                         "arp_hosts": get_arp_table(),
@@ -477,7 +454,6 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
                 check_service("nfs-kernel-server"),
                 check_service("smbd"),
                 check_service("tgt"),
-                {"name": "amule", "status": "active" if run("pgrep amuled 2>/dev/null", 2) else "inactive"}
             ]
             leases = get_dhcp_leases()
             hosts = get_arp_table()
@@ -485,7 +461,6 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
             nfs_clients = get_nfs_clients()
             iscsi_sessions = get_iscsi_sessions()
             sysinfo = get_system_info()
-            dl_progress = get_download_progress()
             logs = get_pxe_log()
         except Exception as e:
             # If any data collection fails, return a minimal page
@@ -501,7 +476,6 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
             nfs_clients = []
             iscsi_sessions = []
             sysinfo = {"uptime": "N/A", "disk": "N/A", "mem": "N/A", "load": "N/A"}
-            dl_progress = f"数据采集失败: {e}"
             logs = []
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -523,7 +497,7 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
             <div class="status-item"><span class="status-dot active"></span> {active_count}/{len(services)} 服务运行中</div>
             <div class="status-item">📡 {len(leases)} DHCP 租约</div>
             <div class="status-item">🔍 {len([h for h in hosts if h.get("state")=="REACHABLE"])} 主机在线</div>
-            <div class="status-item">⬇️ {dl_progress[:50] if dl_progress else "等待下载..."}</div>
+
         </div>
         '''
 
@@ -531,7 +505,7 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
         html += '<div class="grid">'
         html += render_service_card(services)
         html += render_system_card(sysinfo)
-        html += render_download_card(dl_progress)
+
         html += render_arp_card(hosts)
         html += render_connections_card(samba_clients, nfs_clients, iscsi_sessions)
         html += '</div>'
