@@ -3,3 +3,4 @@ temp/
 *.part
 *.part.met
 *.part.met.bak
+__pycache__/
