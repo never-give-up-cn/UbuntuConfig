@@ -152,12 +152,13 @@ def get_arp_table():
                 continue
             parts = line.split()
             if len(parts) >= 4:
-                state = parts[-1] if parts[-1] in ["REACHABLE", "STALE", "DELAY", "PERMANENT"] else "reachable"
-                if state == "REACHABLE":
-                    hosts.append({
-                        "ip": parts[0].replace("(", "").replace(")", ""),
-                        "mac": parts[3] if parts[1] == "lladdr" else (parts[4] if len(parts) > 4 else ""),
-                    })
+                raw_state = parts[-1]
+                state = raw_state if raw_state in ["REACHABLE", "STALE", "DELAY", "PERMANENT"] else "REACHABLE"
+                hosts.append({
+                    "ip": parts[0].replace("(", "").replace(")", ""),
+                    "mac": parts[3] if parts[1] == "lladdr" else (parts[4] if len(parts) > 4 else parts[1]),
+                    "state": state,
+                })
     return hosts
 
 def get_download_progress():
@@ -343,7 +344,7 @@ def render_dhcp_card(leases):
 
 def render_arp_card(hosts):
     """渲染 ARP 表（网络发现）"""
-    pxe_hosts = [h for h in hosts if h["state"] == "REACHABLE"]
+    pxe_hosts = [h for h in hosts if h.get("state") == "REACHABLE"]
     html = f'<div class="card"><div class="card-title">🔍 网络发现 <span>{len(pxe_hosts)} 台在线</span></div>'
     if pxe_hosts:
         html += '<table><tr><th>IP</th><th>MAC</th></tr>'
@@ -521,7 +522,7 @@ class MonitorHandler(http.server.BaseHTTPRequestHandler):
         <div class="status-summary">
             <div class="status-item"><span class="status-dot active"></span> {active_count}/{len(services)} 服务运行中</div>
             <div class="status-item">📡 {len(leases)} DHCP 租约</div>
-            <div class="status-item">🔍 {len([h for h in hosts if h["state"]=="REACHABLE"])} 主机在线</div>
+            <div class="status-item">🔍 {len([h for h in hosts if h.get("state")=="REACHABLE"])} 主机在线</div>
             <div class="status-item">⬇️ {dl_progress[:50] if dl_progress else "等待下载..."}</div>
         </div>
         '''

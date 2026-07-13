@@ -43,30 +43,53 @@ amulecmd -P "1" -c "Status"
 amulecmd -P "1" -c "show dl"
 ```
 
+
 ## PXE 无盘启动
 
-详见 [docs/pxe-diskless-setup.md](docs/pxe-diskless-setup.md)
-
-| 服务 | 用途 | 状态 |
+| 服务 | 端口 | 状态 |
 |------|------|------|
-| dnsmasq (DHCP+TFTP) | IP 分配 + PXE 文件传输 | ✅ active |
-| NFS | Linux 网络启动 | ✅ active |
-| Samba | Windows 文件共享 | ✅ active |
-| iSCSI | 无盘 Windows 启动 | ✅ active |
+| dnsmasq (DHCP+TFTP) | UDP 67-69 | ✅ active |
+| NFS | TCP 2049 | ✅ active |
+| Samba | TCP 445 | ✅ active |
+| iSCSI (tgt) | TCP 3260 | ✅ active |
+| 监控面板 | TCP 8080 | ✅ active |
 
-```bash
-# 一键安装 PXE 服务
-sudo bash setup-pxe.sh
+### PXE 启动选项
+
+| # | 选项 | 适用架构 |
+|---|------|---------|
+| 1 | 本地启动 | 所有 |
+| 2 | Ubuntu Live (NFS) | BIOS/UEFI |
+| 3 | Windows PE (wimboot) | x86/x64 BIOS |
+| 4 | Windows 11 安装 | ARM64 UEFI |
+| 5 | iPXE Shell | 所有 |
+| 6 | 内存测试 | 所有 |
+
+### Windows 11 ARM64 启动文件
+
+```
+/home/pi/Download/zh-cn_windows_11_business_editions_version_25h2_updated_june_2026_arm64_dvd_669c2513.iso
+  └── /srv/winpe/boot.wim    (684M)
+  └── /srv/winpe/install.wim (7.0G)
+  └── /srv/winpe/boot.sdi    (3.1M)
 ```
 
-## 系统架构
+### TFTP 启动文件 (`/srv/tftp/`)
+
+| 文件 | 用途 |
+|------|------|
+| pxelinux.0 | BIOS PXE 引导 |
+| wimboot | Windows PE 引导 (BIOS/x64) |
+| boot.wim | Windows PE 镜像 |
+| boot.sdi | 启动 RAMDISK |
+| efi/bootaa64.efi | ARM64 UEFI 网络启动 |
+
+### 客户端 PXE 启动流程
 
 ```
-客户端 PXE → DHCP(获取IP) → TFTP(下载启动文件) 
-         → PXE菜单 → 选择启动项
-         ├─ 1. 本地启动
-         ├─ 3. Ubuntu Live (NFS)
-         ├─ 4. Windows PE (Samba)
-         ├─ 5. Windows 11 安装
-         └─ 6. iPXE Shell → iSCSI 无盘Windows
+BIOS/x64 客户端:
+  PXE → DHCP(获取IP) → TFTP(pxelinux.0) → 启动菜单 → wimboot → Windows PE
+
+ARM64 UEFI 客户端:
+  PXE → DHCP(获取IP) → TFTP(bootaa64.efi) → Windows 启动管理器
 ```
